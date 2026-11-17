@@ -48,6 +48,8 @@ const RETEST_SPAN = 60;
 const RETEST_DROP = 105n;
 /** Retest arm: a bounce is a bar beating the close 2 bars back by this, in bps. */
 const RETEST_BOUNCE = 10n;
+/** Bounce confirmation lag, in bars: a bounce is measured against the close this many bars back. */
+const BOUNCE_LAG = 2;
 /** Retest arm: how far back to look for that bounce, in bars. */
 const RETEST_LOOKBACK = 20;
 /** Retest arm: take profit, in bps over cost (1.95%). */
@@ -109,7 +111,7 @@ function sawBounce(lookback: number, bps: bigint): boolean {
   const n = closes.length;
   const start = Math.max(RETEST_SPAN, n - 1 - lookback);
   for (let j = start; j < n - 1; j += 1) {
-    if (isUpAtLeast(closes[j], closes[j - 2], bps)) return true;
+    if (isUpAtLeast(closes[j], closes[j - BOUNCE_LAG], bps)) return true;
   }
   return false;
 }
