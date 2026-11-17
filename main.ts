@@ -31,6 +31,15 @@ const DEEP80_DROP = 125n;
 const DEEP80_TAKE = 70n;
 const DEEP80_MAX_HOLD = 150;
 
+// --- Arm: EARLY (round 6, B6) ---
+// Buy the first new 10-bar low in the opening 40 bars, no confirmation:
+// the oracle's first trade buys the bar-11 low, which no breakout rule can
+// reach (bar 25 is the first breakout for every lookback). One shot only.
+const EARLY_LOOK = 10;
+const EARLY_MAX_BAR = 40;
+const EARLY_TAKE = 87n;
+const EARLY_MAX_HOLD = 90;
+
 // --- State (one position at a time, long-only, all-in) ---
 const closes: bigint[] = [];
 let heldBars = 0;
@@ -38,6 +47,7 @@ let currentArm = '';
 let tradesDone = 0;
 let lastExitArm = '';
 let breakoutDone = 0;
+let earlyDone = 0;
 let peakValue = 0n;
 
 // --- Integer helpers (no floats anywhere) ---
@@ -101,6 +111,15 @@ function fireDeep80(latest: bigint): boolean {
   return isDownAtLeast(latest, closes[n - 1 - DEEP80_SPAN]!, DEEP80_DROP);
 }
 
+// --- Arm: EARLY ---
+function fireEarly(latest: bigint): boolean {
+  const n = closes.length;
+  if (!(n - 1 >= EARLY_LOOK)) return false;
+  if (!(n - 1 < EARLY_MAX_BAR)) return false;
+  if (!(earlyDone === 0)) return false;
+  return isSpanLow(latest, EARLY_LOOK);
+}
+
 // --- Arm: BREAKOUT ---
 // Why this arm exists: the dip arms only fire after a fall, so they miss the
 // window's opening leg, where price grinds up out of a tight 30-bar range
@@ -108,12 +127,12 @@ function fireDeep80(latest: bigint): boolean {
 // (bar < 150), and only when the close both breaks the prior 20-bar high by
 // >=7 bps and is still rising (+10 bps vs 2 bars ago) out of a range no
 // wider than 60 bps — a genuine breakout, not a drift through a wide chop.
-// --- Arm: LATELEG ---
+// --- Arm: LATELEG (round 6, B6) ---
 // Why this arm exists: after a retest trade has completed, the same deep
 // 60-bar dip shape often repeats as a second leg while the move is still
-// alive. It re-uses the retest drop (105 bps) but needs only a small
-// +7 bps turn (no fresh-low / bounce-window proof) and takes a quick
-// +30 bps, because by then the easy part of the move is already banked.
+// alive. Round 6 dropped the +7 bps turn confirmation: the only fill better
+// than v4 is a signal ON the low bar itself, so the arm now needs a deeper
+// 60-bar drop (114 bps) AND a fresh 10-bar low, and takes a quick +42 bps.
 const BREAKOUT_SPAN = 20;
 const BREAKOUT_MARGIN = 7n;
 const BREAKOUT_MOMENTUM = 10n;
@@ -146,19 +165,22 @@ function fireBreakout(latest: bigint): boolean {
 
 // --- Arm: LATELEG ---
 const LATELEG_SPAN = 60;
-const LATELEG_DROP = 105n;
-const LATELEG_TURN_LAG = 2;
-const LATELEG_BOUNCE = 7n;
-const LATELEG_TAKE = 30n;
+const LATELEG_DROP = 114n;
+const LATELEG_LOOK = 10;
+const LATELEG_TAKE = 42n;
 const LATELEG_MAX_HOLD = 90;
 
+// Round 6 (B6): the +7 bp turn confirmation is dropped. The late leg's only
+// better fill than v4 is a signal ON the low bar itself (fill = next open),
+// so the arm now requires a deep 60-bar drop (114 bp) AND a new 10-bar low,
+// with no uptick confirmation. Take 42 bp / hold 90.
 function fireLateleg(latest: bigint): boolean {
   const n = closes.length;
   if (!(tradesDone >= 2)) return false;
   if (!(lastExitArm === 'retest')) return false;
   if (!(closes.length > LATELEG_SPAN)) return false;
   if (!isDownAtLeast(latest, closes[n - 1 - LATELEG_SPAN]!, LATELEG_DROP)) return false;
-  if (!isUpAtLeast(latest, closes[n - 1 - LATELEG_TURN_LAG]!, LATELEG_BOUNCE)) return false;
+  if (!isSpanLow(latest, LATELEG_LOOK)) return false;
   return true;
 }
 
@@ -167,6 +189,7 @@ function exitParams(arm: string): { take: bigint; maxHold: number } {
   if (arm === 'shallow') return { take: SHALLOW_TAKE, maxHold: SHALLOW_MAX_HOLD };
   if (arm === 'deep80') return { take: DEEP80_TAKE, maxHold: DEEP80_MAX_HOLD };
   if (arm === 'breakout') return { take: BREAKOUT_TAKE, maxHold: BREAKOUT_MAX_HOLD };
+  if (arm === 'early') return { take: EARLY_TAKE, maxHold: EARLY_MAX_HOLD };
   if (arm === 'lateleg') return { take: LATELEG_TAKE, maxHold: LATELEG_MAX_HOLD };
   return { take: RETEST_TAKE, maxHold: RETEST_MAX_HOLD };
 }
@@ -195,6 +218,7 @@ await runBars({
         heldBars = 0;
         peakValue = 0n;
         if (currentArm === 'breakout') breakoutDone++;
+        if (currentArm === 'early') earlyDone++;
         lastExitArm = currentArm;
         tradesDone++;
         currentArm = '';
@@ -212,6 +236,7 @@ await runBars({
     if (fireRetest(latest)) arm = 'retest';
     else if (fireShallow(latest)) arm = 'shallow';
     else if (fireDeep80(latest)) arm = 'deep80';
+    else if (fireEarly(latest)) arm = 'early';
     else if (fireBreakout(latest)) arm = 'breakout';
     else if (fireLateleg(latest)) arm = 'lateleg';
 
